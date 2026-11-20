@@ -1,1 +1,1 @@
-"""Round-trip semantic encryption with an LFM3 language model."""
+"""Round-trip semantic encryption with a causal language model."""

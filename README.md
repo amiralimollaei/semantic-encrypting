@@ -6,13 +6,14 @@ A notebook experiment in round-trip semantic encryption: turn plaintext into mod
 
 ```sh
 uv sync
-uv pip install torch
 uv run --no-sync jupyter notebook Main.ipynb
 ```
 
-Install a PyTorch build for your device and point the first cell in [`Main.ipynb`](Main.ipynb) at a local `LFM3-1.7B-Base` checkpoint. The notebook uses `cuda:0`; change it to `cpu` if needed. Run the cells in order to produce a plain-text document and recover the original message.
+`uv sync` installs PyTorch with the project. If you need a device-specific build, install it in the project environment after syncing and keep `--no-sync` when launching the notebook or benchmark. Point the first cell in [`Main.ipynb`](Main.ipynb) at a local `LFM3-1.7B-Base` checkpoint. The notebook uses CUDA; change its device to `cpu` if needed. Run the cells in order to produce a plain-text document and recover the original message.
 
 ## Python API
+
+From a checkout, run `uv sync` before using the API.
 
 ```python
 from secrets import token_bytes
@@ -64,6 +65,8 @@ The cover renderer already has no sampling RNG. This option uses nonce-free AES-
 3. Re-tokenize the cover and rebuild the same restricted probability tables to recover the envelope. Authenticate and decrypt it before decoding the plaintext.
 
 Use the same model, tokenizer, and numerical environment on both sides. The renderer uses the checkpoint's configured context limit (262,144 tokens for the local LFM3-1.7B-Base checkpoint). The plaintext must fit on its own, and the optional prefix and cover must fit together. Generated cover text may include arbitrary markup and is not guaranteed to be fluent or undetectable.
+
+The model's context window is a token limit, not a practical cover-size target. Both rendering and recovery check candidates against the full cover prefix because a tokenizer can revise earlier tokens when text is appended. Candidate validation can therefore scale quadratically with cover length. Keep messages short and use the benchmark below to establish a practical size limit for your checkpoint, device, and latency budget.
 
 ## Code map
 
