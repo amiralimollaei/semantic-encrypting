@@ -41,8 +41,18 @@ The prefix is not included in the cover. Share it separately and preserve its ex
 For repeatable output, pass `deterministic=True` to both calls:
 
 ```python
+key = bytes(range(32))  # Public example key only. Never use it for private messages.
 document = encryptor.encrypt("Meet at noon.", key, deterministic=True)
+print(document)
 assert encryptor.decrypt(document, key, deterministic=True) == "Meet at noon."
+```
+
+Output with `LFM3-1.7B-Base` on CUDA (PyTorch `2.15.0+cu134`, Transformers `5.23.0`):
+
+```text
+# 2016–17 FC Porto season
+The 2016–2017 season is the fourth consecutive top-twelfte season for Portuguese club FC Porto, since their debut in the Primeiro Ligão for the 1961. On the whole year, they are also participating at the 2nd division championship of the league.
+The club began the 2017 season with the 2017 Supertaça CAVM, where
 ```
 
 The cover renderer already has no sampling RNG. This option uses nonce-free AES-SIV with a key derived from the same 32-byte key. With the same message, key, context, and model environment, it produces identical cover text. **This reveals repeated messages.** The default uses a fresh random nonce and remains compatible with earlier context-free covers.
