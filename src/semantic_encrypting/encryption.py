@@ -11,10 +11,11 @@ from .codec import TextCodec
 
 _TAG_SIZE = 16
 _UINT32 = Struct(">I")
-_SIV_DOMAIN = b"semantic-encrypting/v3/deterministic-aes-siv"
+_SIV_DOMAIN = b"semantic-encrypting/v4/deterministic-aes-siv"
 
-# The cover carries the unsigned LEB128 sealed length followed by the sealed
-# message, which starts with the big-endian plaintext token count.
+_MARKER = b"\x00"
+_ESCAPED_MARKER = b"\x00\x01"
+_END = b"\x00\x00"
 
 
 def _siv_cipher(key: bytes) -> AESSIV:
@@ -22,48 +23,36 @@ def _siv_cipher(key: bytes) -> AESSIV:
     return AESSIV(derived)
 
 
-def _encode_sealed_size(size: int) -> bytes:
-    if size >= 1 << 32:
-        raise ValueError("Encrypted document is too large")
-    encoded = bytearray()
-    while size >= 0x80:
-        encoded.append((size & 0x7F) | 0x80)
-        size >>= 7
-    encoded.append(size)
-    return bytes(encoded)
-
-
-def _decode_sealed_size(packed: bytes) -> tuple[int, int]:
-    size = 0
-    for offset, shift in enumerate(range(0, 32, 7)):
-        if offset >= len(packed):
-            raise ValueError("Encrypted document is incomplete")
-        byte = packed[offset]
-        if (shift == 28 and byte > 0x0F) or (shift and byte == 0):
-            break
-        size |= (byte & 0x7F) << shift
-        if byte < 0x80:
-            return size, offset + 1
-    raise ValueError("Invalid encrypted document length")
+def _unframe(packed: bytes) -> bytes:
+    sealed = bytearray()
+    start = 0
+    while (marker := packed.find(_MARKER, start)) != -1 and marker + 1 < len(packed):
+        suffix = packed[marker + 1]
+        if suffix == _END[1]:
+            # The final cover token can settle bits beyond the end marker.
+            if not start:
+                return packed[:marker]
+            sealed.extend(packed[start:marker])
+            return bytes(sealed)
+        if suffix != _ESCAPED_MARKER[1]:
+            raise ValueError("Invalid encrypted document escape")
+        sealed.extend(packed[start:marker + 1])
+        start = marker + 2
+    raise ValueError("Encrypted document is missing its end marker")
 
 
 def _seal_message(message: bytes, key: bytes, context: bytes) -> bytes:
-    header = _encode_sealed_size(len(message) + _TAG_SIZE)
-    sealed = _siv_cipher(key).encrypt(message, [_SIV_DOMAIN, header, context])
-    return header + sealed
+    sealed = _siv_cipher(key).encrypt(message, [_SIV_DOMAIN, context])
+    return sealed.replace(_MARKER, _ESCAPED_MARKER) + _END
 
 
 def _open_message(packed: bytes, key: bytes, context: bytes) -> bytes:
-    sealed_size, header_size = _decode_sealed_size(packed)
-    sealed_end = header_size + sealed_size
-    if sealed_size < _TAG_SIZE + _UINT32.size or sealed_end > len(packed):
+    sealed = _unframe(packed)
+    if len(sealed) < _TAG_SIZE + _UINT32.size:
         raise ValueError("Invalid encrypted document length")
 
-    header = packed[:header_size]
-    # The final cover token can settle bits beyond the authenticated envelope.
-    sealed = packed[header_size:sealed_end]
     try:
-        return _siv_cipher(key).decrypt(sealed, [_SIV_DOMAIN, header, context])
+        return _siv_cipher(key).decrypt(sealed, [_SIV_DOMAIN, context])
     except InvalidTag as exc:
         raise ValueError("Wrong key or modified encrypted document") from exc
 

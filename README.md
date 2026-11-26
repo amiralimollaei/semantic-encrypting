@@ -48,7 +48,7 @@ demo_key = bytes(range(32))  # Example only; use a random secret key in practice
 print(encryptor.encrypt("Meet at noon.", demo_key))
 ```
 
-With `LFM3-1.7B-Base` on CUDA, the cover began:
+The kind of cover produced by `LFM3-1.7B-Base` on CUDA:
 
 ```text
 # 8 de mê guérilyè
@@ -57,9 +57,9 @@ With `LFM3-1.7B-Base` on CUDA, the cover began:
 
 ## The round trip
 
-1. Arithmetic-code the plaintext and seal the bytes and token count with AES-SIV. The cover text encodes the authenticated sealed byte length as an unsigned LEB128 varint (one byte up to 127, two up to 16,383), followed by the sealed message. Equal lengths still have identical encodings.
+1. Arithmetic-code the plaintext and seal the bytes and token count with AES-SIV. The cover payload starts directly with the sealed message, with no length header. Escape each `00` byte as `00 01` and append `00 00` to mark the end.
 2. Render the whole envelope in one pass. At each step, the existing tokenizer checks whether a candidate extends the exact token prefix. The arithmetic coder uses only those candidates and caps the largest probability at 50%.
-3. Re-tokenize the cover and rebuild the same restricted probability tables to recover the envelope. Authenticate and decrypt it before decoding the plaintext.
+3. Re-tokenize the cover and rebuild the same restricted probability tables. Read through the end marker, ignoring any extra bits settled by the final cover token. Authenticate and decrypt the sealed message before decoding the plaintext.
 
 Use the same model, tokenizer, and numerical environment on both sides. The renderer uses the checkpoint's configured context limit (262,144 tokens for the local LFM3-1.7B-Base checkpoint). The plaintext must fit on its own, and the optional prefix and cover must fit together. Generated cover text may include arbitrary markup and is not guaranteed to be fluent or undetectable.
 
