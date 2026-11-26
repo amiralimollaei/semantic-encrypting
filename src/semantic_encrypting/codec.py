@@ -23,7 +23,7 @@ class RenderError(ValueError):
 
 
 class TextCodec:
-    """Use the full vocabulary for plaintext and canonical tokens for covers."""
+    """Use the full vocabulary plus an end symbol for plaintext, and canonical tokens for covers."""
 
     def __init__(self, model_path: str | Path, device: str = "cpu") -> None:
         self._tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
@@ -39,7 +39,8 @@ class TextCodec:
             raise ValueError("Model must define a beginning-of-sequence token")
         self._bos = bos
         self._max_tokens = self._model.config.max_position_embeddings
-        if _FREQUENCY_BUDGET + self._model.config.vocab_size >= MAX_TOTAL:
+        self._plaintext_end = self._model.config.vocab_size
+        if _FREQUENCY_BUDGET + self._plaintext_end + 1 > MAX_TOTAL:
             raise ValueError("Model vocabulary exceeds the arithmetic coder's frequency limit")
 
     def _decode_text(self, tokens: list[int]) -> str:
@@ -66,20 +67,22 @@ class TextCodec:
         # Reserve one count per token, even where softmax rounds to zero.
         # Flooring the remaining counts keeps the total within the budget.
         counts = (probabilities * _FREQUENCY_BUDGET).to(torch.int32).add_(1)
-        cdf = torch.empty(counts.numel() + 1, dtype=torch.int32)
+        # The extra count is a coding symbol, not a model token. Real tokens
+        # keep their weights, including any literal model EOS in the plaintext.
+        cdf = torch.empty(counts.numel() + 2, dtype=torch.int32)
         cdf[0] = 0
-        torch.cumsum(counts, dim=0, out=cdf[1:])
+        torch.cumsum(counts, dim=0, out=cdf[1:-1])
+        cdf[-1] = cdf[-2] + 1
         return cdf.numpy(), output.past_key_values
 
     @torch.inference_mode()
-    def compress(self, text: str) -> tuple[bytes, int]:
-        """Return the byte-packed arithmetic bits and the token count."""
+    def compress(self, text: str) -> bytes:
+        """Arithmetic-code the plaintext tokens followed by a reserved end symbol."""
         tokens = self._tokenizer.encode(text, add_special_tokens=False)
         if self._decode_text(tokens) != text:
             raise ValueError("This tokenizer cannot reproduce the input text exactly")
-        self._check_length(len(tokens))
-        if not tokens:
-            return b"", 0
+        # BOS and every plaintext token must be fed to predict the end symbol.
+        self._check_length(len(tokens) + 1)
 
         encoder = ArithmeticEncoder()
         previous, cache = self._bos, None
@@ -87,24 +90,26 @@ class TextCodec:
             cdf, cache = self._predict(previous, cache)
             encoder.write(cdf, token)
             previous = token
-        return encoder.finish(), len(tokens)
+        cdf, _ = self._predict(previous, cache)
+        encoder.write(cdf, self._plaintext_end)
+        return encoder.finish()
 
     @torch.inference_mode()
-    def decompress(self, bits: bytes | memoryview, token_count: int) -> str:
-        """Recover text from byte-packed arithmetic bits and a token count."""
-        self._check_length(token_count)
-        if bool(token_count) != bool(bits):
-            raise ValueError("Arithmetic payload does not match its token count")
+    def decompress(self, bits: bytes | memoryview) -> str:
+        """Recover plaintext up to the reserved end symbol."""
+        if not bits:
+            raise ValueError("Empty arithmetic payload")
 
+        decoder = ArithmeticDecoder(bits)
         tokens = []
-        if token_count:
-            decoder = ArithmeticDecoder(bits)
-            previous, cache = self._bos, None
-            for _ in range(token_count):
-                cdf, cache = self._predict(previous, cache)
-                previous = decoder.read(cdf)
-                tokens.append(previous)
-        return self._decode_text(tokens)
+        previous, cache = self._bos, None
+        for _ in range(self._max_tokens):
+            cdf, cache = self._predict(previous, cache)
+            previous = decoder.read(cdf)
+            if previous == self._plaintext_end:
+                return self._decode_text(tokens)
+            tokens.append(previous)
+        raise ValueError("Plaintext end symbol not found within the model context")
 
     @cached_property
     def _cover_vocab(self) -> tuple[list[str], NDArray[np.intp]]:

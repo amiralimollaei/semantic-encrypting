@@ -1,7 +1,5 @@
 """Turn plaintext into a plain-text document and recover it with a shared key."""
 
-from struct import Struct
-
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESSIV
@@ -10,8 +8,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from .codec import TextCodec
 
 _TAG_SIZE = 16
-_UINT32 = Struct(">I")
-_SIV_DOMAIN = b"semantic-encrypting/v4/deterministic-aes-siv"
+_SIV_DOMAIN = b"semantic-encrypting/v5/deterministic-aes-siv"
 
 _MARKER = b"\x00"
 _ESCAPED_MARKER = b"\x00\x01"
@@ -48,7 +45,7 @@ def _seal_message(message: bytes, key: bytes, context: bytes) -> bytes:
 
 def _open_message(packed: bytes, key: bytes, context: bytes) -> bytes:
     sealed = _unframe(packed)
-    if len(sealed) < _TAG_SIZE + _UINT32.size:
+    if len(sealed) < _TAG_SIZE:
         raise ValueError("Invalid encrypted document length")
 
     try:
@@ -65,9 +62,8 @@ class SemanticEncryptor:
         """Encrypt text as one deterministic cover."""
         if len(key) != 32:
             raise ValueError("Key must be 32 bytes")
-        compressed, token_count = self._codec.compress(text)
-        message = _UINT32.pack(token_count) + compressed
-        envelope = _seal_message(message, key, context.encode("utf-8"))
+        compressed = self._codec.compress(text)
+        envelope = _seal_message(compressed, key, context.encode("utf-8"))
         return self._codec.render_bits(envelope, context=context)
 
     def decrypt(self, document: str, key: bytes, *, context: str = "") -> str:
@@ -75,7 +71,5 @@ class SemanticEncryptor:
         if len(key) != 32:
             raise ValueError("Key must be 32 bytes")
         packed = self._codec.recover_bits(document, context=context)
-        message = _open_message(packed, key, context.encode("utf-8"))
-        token_count, = _UINT32.unpack_from(message)
-        compressed = memoryview(message)[_UINT32.size:]
-        return self._codec.decompress(compressed, token_count)
+        compressed = _open_message(packed, key, context.encode("utf-8"))
+        return self._codec.decompress(compressed)

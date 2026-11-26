@@ -57,11 +57,11 @@ The kind of cover produced by `LFM3-1.7B-Base` on CUDA:
 
 ## The round trip
 
-1. Arithmetic-code the plaintext and seal the bytes and token count with AES-SIV. The cover payload starts directly with the sealed message, with no length header. Escape each `00` byte as `00 01` and append `00 00` to mark the end.
+1. Arithmetic-code the plaintext followed by a reserved end symbol, then seal the resulting bytes with AES-SIV. No plaintext token count or ciphertext length header is stored. The cover payload escapes each `00` ciphertext byte as `00 01` and appends `00 00` to mark the end.
 2. Render the whole envelope in one pass. At each step, the existing tokenizer checks whether a candidate extends the exact token prefix. The arithmetic coder uses only those candidates and caps the largest probability at 50%.
-3. Re-tokenize the cover and rebuild the same restricted probability tables. Read through the end marker, ignoring any extra bits settled by the final cover token. Authenticate and decrypt the sealed message before decoding the plaintext.
+3. Re-tokenize the cover and rebuild the same restricted probability tables. Read through the cover's end marker, ignoring any extra bits settled by the final cover token. Authenticate and decrypt the sealed message, then decode the plaintext until its reserved end symbol.
 
-Use the same model, tokenizer, and numerical environment on both sides. The renderer uses the checkpoint's configured context limit (262,144 tokens for the local LFM3-1.7B-Base checkpoint). The plaintext must fit on its own, and the optional prefix and cover must fit together. Generated cover text may include arbitrary markup and is not guaranteed to be fluent or undetectable.
+Use the same model, tokenizer, and numerical environment on both sides. The renderer uses the checkpoint's configured context limit (262,144 tokens for the local LFM3-1.7B-Base checkpoint). The plaintext must fit with one extra model position for termination, and the optional prefix and cover must fit together. Generated cover text may include arbitrary markup and is not guaranteed to be fluent or undetectable.
 
 The model's context window is a token limit, not a practical cover-size target. Both rendering and recovery check candidates against the full cover prefix because a tokenizer can revise earlier tokens when text is appended. Candidate validation can therefore scale quadratically with cover length. Keep messages short and use the benchmark below to establish a practical size limit for your checkpoint, device, and latency budget.
 
@@ -80,13 +80,13 @@ uv run --no-sync python benchmark_render.py /path/to/LFM3-1.7B-Base \
 
 The benchmark checks exact recovery and reports render, encryption, and decryption times. Add `--context 'Shared model prefix'` to benchmark a prefix or `--device cpu` to run without CUDA.
 
-## Test the encryption envelope
+## Test framing and plaintext termination
 
 ```sh
 uv run --no-sync python -m unittest discover -s tests -p test_encryption.py
 ```
 
-Run after `uv sync`. The tests do not load a model checkpoint.
+Run after `uv sync`. The tests build a tiny local model and do not download a checkpoint.
 
 ## Type checking
 
