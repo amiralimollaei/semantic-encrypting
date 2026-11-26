@@ -27,7 +27,7 @@ document = encryptor.encrypt("Meet at noon.", key)
 assert encryptor.decrypt(document, key) == "Meet at noon."
 ```
 
-The output is one continuous cover text. There are no separators, footers, or external length fields. Pass the complete raw text back unchanged, including whitespace. Documents from the earlier sectioned format are not compatible.
+The output is one continuous cover text. There are no separators, footers, or external length fields. Pass the complete raw text back unchanged, including whitespace.
 
 Pass the same optional `context` to both calls to make the cover a continuation of a shared model prefix:
 
@@ -39,28 +39,25 @@ assert encryptor.decrypt(document, key, context=context) == "Meet at noon."
 
 The prefix is not included in the cover. Share it separately and preserve its exact text, including whitespace. It conditions cover generation and is authenticated, but it is not a secret key. Omit it to keep the original context-free behavior.
 
-For repeatable output, pass `deterministic=True` to both calls:
+Encryption always uses nonce-free AES-SIV with a key derived from the supplied 32-byte key. The same message, key, context, and model environment produce identical cover text. **This reveals repeated messages.**
+
+For example, this demo uses a fixed public key to make the cover repeatable:
 
 ```python
-key = bytes(range(32))  # Public example key only. Never use it for private messages.
-document = encryptor.encrypt("Meet at noon.", key, deterministic=True)
-print(document)
-assert encryptor.decrypt(document, key, deterministic=True) == "Meet at noon."
+demo_key = bytes(range(32))  # Example only; use a random secret key in practice.
+print(encryptor.encrypt("Meet at noon.", demo_key))
 ```
 
-Output with `LFM3-1.7B-Base` on CUDA (PyTorch `2.15.0+cu134`, Transformers `5.23.0`):
+With `LFM3-1.7B-Base` on CUDA, the cover began:
 
 ```text
-# 2016–17 FC Porto season
-The 2016–2017 season is the fourth consecutive top-twelfte season for Portuguese club FC Porto, since their debut in the Primeiro Ligão for the 1961. On the whole year, they are also participating at the 2nd division championship of the league.
-The club began the 2017 season with the 2017 Supertaça CAVM, where
+# 8 de mê guérilyè
+- Guérilye, rèpublicen, anpi et pi gôches, 1
 ```
-
-The cover renderer already has no sampling RNG. This option uses nonce-free AES-SIV with a key derived from the same 32-byte key. With the same message, key, context, and model environment, it produces identical cover text. **This reveals repeated messages.** The default uses a fresh random nonce and remains compatible with earlier context-free covers.
 
 ## The round trip
 
-1. Arithmetic-code the plaintext and seal the bytes and token count with ChaCha20-Poly1305 by default, or AES-SIV in deterministic mode. The authenticated byte length and, when used, the random nonce travel inside the cover text.
+1. Arithmetic-code the plaintext and seal the bytes and token count with AES-SIV. The cover text encodes the authenticated sealed byte length as an unsigned LEB128 varint (one byte up to 127, two up to 16,383), followed by the sealed message. Equal lengths still have identical encodings.
 2. Render the whole envelope in one pass. At each step, the existing tokenizer checks whether a candidate extends the exact token prefix. The arithmetic coder uses only those candidates and caps the largest probability at 50%.
 3. Re-tokenize the cover and rebuild the same restricted probability tables to recover the envelope. Authenticate and decrypt it before decoding the plaintext.
 
@@ -82,6 +79,14 @@ uv run --no-sync python benchmark_render.py /path/to/LFM3-1.7B-Base \
 ```
 
 The benchmark checks exact recovery and reports render, encryption, and decryption times. Add `--context 'Shared model prefix'` to benchmark a prefix or `--device cpu` to run without CUDA.
+
+## Test the encryption envelope
+
+```sh
+uv run --no-sync python -m unittest discover -s tests -p test_encryption.py
+```
+
+Run after `uv sync`. The tests do not load a model checkpoint.
 
 ## Type checking
 

@@ -42,7 +42,7 @@ def main() -> None:
         ("document", args.input.read_text(encoding="utf-8")),
     ]
     codec = MeasuredCodec(args.checkpoint, args.device)
-    key = bytes(32)  # Benchmark only; encrypt still generates a fresh nonce.
+    key = bytes(32)  # Benchmark only; never use a public key for private messages.
     encryptor = SemanticEncryptor(codec)
     codec.compress("Warm up.")
 
